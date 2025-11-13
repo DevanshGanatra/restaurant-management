@@ -28,21 +28,5 @@ app.use('/api/admin/layout', require('./routes/admin/layout'));
 
 app.get('/', (req, res) => res.send('Restaurant Backend Running'));
 
-/* -----------------------------------------
-   TEMPORARY SEED ROUTE (REMOVE AFTER USE)
------------------------------------------ */
-app.get('/seed', async (req, res) => {
-  try {
-    const seed = require('./seed');
-    await seed.run();
-    res.json({ success: true, message: "Seeded successfully" });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-/* -----------------------------------------
-   END SEED ROUTE
------------------------------------------ */
-
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
