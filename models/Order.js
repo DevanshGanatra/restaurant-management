@@ -10,7 +10,7 @@ const OrderItemSchema = new mongoose.Schema({
 const OrderSchema = new mongoose.Schema({
   tableId: { type: mongoose.Schema.Types.ObjectId, ref: 'Table' },
   items: [OrderItemSchema],
-  status: { type: String, enum: ['draft','pending','completed'], default: 'draft' },
+  status: { type: String, enum: ['draft','completed'], default: 'draft' },
   finishedAt: Date
 }, { timestamps: true });
 
