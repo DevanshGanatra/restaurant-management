@@ -1,20 +1,35 @@
+// routes/waiter/orders.js
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const Order = require('../../models/Order');
 const Table = require('../../models/Table');
 const Item = require('../../models/Item');
 const auth = require('../../middleware/auth');
 
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+
 // POST /api/waiter/orders  create order (draft)
 router.post('/', auth, async (req, res) => {
   try {
     const { tableId, items = [] } = req.body;
 
-    // validate items: fetch item prices and names
+    if (!tableId || !isValidId(tableId)) {
+      return res.status(400).json({ success: false, error: 'Invalid or missing tableId' });
+    }
+
+    // verify table exists
+    const table = await Table.findById(tableId);
+    if (!table) return res.status(404).json({ success: false, error: 'Table not found' });
+
+    // validate & enrich items
     const enriched = [];
     for (const it of items) {
+      if (!it.itemId || !isValidId(it.itemId)) {
+        return res.status(400).json({ success: false, error: 'Invalid itemId in items' });
+      }
       const dbItem = await Item.findById(it.itemId);
-      if (!dbItem) return res.status(400).json({ success:false, error: `Menu item ${it.itemId} not found` });
+      if (!dbItem) return res.status(400).json({ success: false, error: `Menu item ${it.itemId} not found` });
       enriched.push({
         itemId: dbItem._id,
         name: dbItem.name,
@@ -23,38 +38,70 @@ router.post('/', auth, async (req, res) => {
       });
     }
 
+    // create order as draft
     const order = await Order.create({ tableId, items: enriched, status: 'draft' });
-    // mark table active
-    if (tableId) {
-      const table = await Table.findById(tableId);
-      if (table) { table.status = 'active'; await table.save(); }
-    }
 
-    res.json({ success:true, data: order });
+    // mark table active (you may want to change this behaviour: mark active only when order is sent)
+    table.status = 'active';
+    await table.save();
+
+    const populated = await Order.findById(order._id).populate('tableId');
+    return res.status(201).json({ success: true, data: populated });
   } catch (err) {
-    res.status(500).json({ success:false, error: err.message });
+    console.error('POST /orders error', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// GET /api/waiter/orders/:tableId  get active order for a table (draft)
+// GET /api/waiter/orders  list orders (supports ?status=draft|completed)
+router.get('/', auth, async (req, res) => {
+  try {
+    const { status } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+    const orders = await Order.find(filter).populate('tableId').sort({ createdAt: -1 });
+    return res.json({ success: true, data: orders });
+  } catch (err) {
+    console.error('GET /orders error', err);
+    return res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// GET /api/waiter/orders/:tableId  get latest non-completed order for a table
 router.get('/:tableId', auth, async (req, res) => {
-  const tableId = req.params.tableId;
-  const order = await Order.findOne({ tableId, status: { $ne: 'completed' }}).sort({ createdAt: -1 });
-  res.json({ success:true, data: order });
+  try {
+    const tableId = req.params.tableId;
+    if (!isValidId(tableId)) return res.status(400).json({ success: false, error: 'Invalid tableId' });
+
+    const order = await Order.findOne({ tableId, status: { $ne: 'completed' } })
+      .sort({ createdAt: -1 })
+      .populate('tableId');
+
+    return res.json({ success: true, data: order ?? null });
+  } catch (err) {
+    console.error('GET /orders/:tableId error', err);
+    return res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
 
 // PUT /api/waiter/orders/:orderId  update items (replace items array)
 router.put('/:orderId', auth, async (req, res) => {
   try {
-    const order = await Order.findById(req.params.orderId);
-    if (!order) return res.status(404).json({ success:false, error: 'Order not found' });
-    if (order.status === 'completed') return res.status(400).json({ success:false, error: 'Order already completed' });
+    const orderId = req.params.orderId;
+    if (!isValidId(orderId)) return res.status(400).json({ success: false, error: 'Invalid orderId' });
+
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+    if (order.status === 'completed') return res.status(400).json({ success: false, error: 'Order already completed' });
 
     const { items = [] } = req.body;
     const enriched = [];
     for (const it of items) {
+      if (!it.itemId || !isValidId(it.itemId)) {
+        return res.status(400).json({ success: false, error: `Invalid itemId in items` });
+      }
       const dbItem = await Item.findById(it.itemId);
-      if (!dbItem) return res.status(400).json({ success:false, error: `Menu item ${it.itemId} not found` });
+      if (!dbItem) return res.status(400).json({ success: false, error: `Menu item ${it.itemId} not found` });
       enriched.push({
         itemId: dbItem._id,
         name: dbItem.name,
@@ -64,18 +111,24 @@ router.put('/:orderId', auth, async (req, res) => {
     }
     order.items = enriched;
     await order.save();
-    res.json({ success:true, data: order });
+
+    const populated = await Order.findById(order._id).populate('tableId');
+    return res.json({ success: true, data: populated });
   } catch (err) {
-    res.status(500).json({ success:false, error: err.message });
+    console.error('PUT /orders/:orderId error', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // POST /api/waiter/orders/:orderId/finish
 router.post('/:orderId/finish', auth, async (req, res) => {
   try {
-    const order = await Order.findById(req.params.orderId);
-    if (!order) return res.status(404).json({ success:false, error: 'Order not found' });
-    if (order.status === 'completed') return res.status(400).json({ success:false, error: 'Already completed' });
+    const orderId = req.params.orderId;
+    if (!isValidId(orderId)) return res.status(400).json({ success: false, error: 'Invalid orderId' });
+
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ success: false, error: 'Order not found' });
+    if (order.status === 'completed') return res.status(400).json({ success: false, error: 'Already completed' });
 
     order.status = 'completed';
     order.finishedAt = new Date();
@@ -83,13 +136,14 @@ router.post('/:orderId/finish', auth, async (req, res) => {
 
     // mark table vacant
     if (order.tableId) {
-      const table = await Table.findById(order.tableId);
-      if (table) { table.status = 'vacant'; await table.save(); }
+      await Table.findByIdAndUpdate(order.tableId, { status: 'vacant' });
     }
 
-    res.json({ success:true, data: order });
+    const populated = await Order.findById(order._id).populate('tableId');
+    return res.json({ success: true, data: populated });
   } catch (err) {
-    res.status(500).json({ success:false, error: err.message });
+    console.error('POST /orders/:orderId/finish error', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
