@@ -10,23 +10,57 @@ router.get('/', auth, role(['admin']), async (req, res) => {
   res.json({ success:true, data: layout });
 });
 
-// POST or update
 router.post('/', auth, role(['admin']), async (req, res) => {
   try {
     const { rows, columns, layout } = req.body;
+
+    // 1. Clear all old tables
+    await Table.deleteMany({});
+
+    // 2. Recreate tables in order of layout
+    let counter = 1;
+    const updatedLayout = [];
+
+    for (const cell of layout) {
+      if (cell.type === 'table') {
+
+        const newTable = await Table.create({
+          name: `T${counter}`,
+          status: 'vacant'
+        });
+
+        updatedLayout.push({
+          ...cell,
+          tableId: newTable._id.toString()
+        });
+
+        counter++;
+      } else {
+        updatedLayout.push({ ...cell, tableId: null });
+      }
+    }
+
+    // 3. Save layout
     let tl = await TableLayout.findOne();
     if (!tl) {
-      tl = await TableLayout.create({ rows, columns, layout });
+      tl = await TableLayout.create({
+        rows,
+        columns,
+        layout: updatedLayout
+      });
     } else {
       tl.rows = rows;
       tl.columns = columns;
-      tl.layout = layout;
+      tl.layout = updatedLayout;
       await tl.save();
     }
-    res.json({ success:true, data: tl });
+
+    return res.json({ success: true, data: tl });
+
   } catch (err) {
-    res.status(500).json({ success:false, error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
+
 
 module.exports = router;
